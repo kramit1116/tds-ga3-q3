@@ -173,15 +173,50 @@ def extract_amount(text: str) -> Optional[float]:
 
 
 def extract_tax(text: str) -> Optional[float]:
-    # Try specific tax-type keywords first (most reliable), then fall back
-    # to the generic word "tax" -- but skip lines like "Tax ID: 123456789"
-    # which aren't a tax amount at all.
-    specific_line = _line_containing(text, r"\b(?:gst|cgst|sgst|igst|vat|cess)\b")
+    # 1) An explicit "Total Tax" / "Total GST" / "GST Total" line is the
+    #    most reliable source if the invoice provides one.
+    total_line = _line_containing(text, r"\btotal\s*(?:gst|tax)\b|\b(?:gst|tax)\s*total\b")
+    if total_line:
+        nums = _numbers_excluding_percent(total_line)
+        if nums:
+            return clean_number(nums[-1])
+
+    # 2) Indian-style invoices often split tax into CGST + SGST (or add
+    #    Cess). These are separate line items that together make up the
+    #    real tax amount, so we sum every distinct component we find.
+    component_patterns = {
+        "cgst": r"\bcgst\b",
+        "sgst": r"\bsgst\b",
+        "igst": r"\bigst\b",
+        "cess": r"\bcess\b",
+    }
+    total = 0.0
+    found_components = []
+    for line in text.split("\n"):
+        if not re.search(r"\d", line):
+            continue
+        for key, pat in component_patterns.items():
+            if key in found_components:
+                continue
+            if re.search(pat, line, re.IGNORECASE):
+                nums = _numbers_excluding_percent(line)
+                if nums:
+                    total += clean_number(nums[-1])
+                    found_components.append(key)
+                break
+    if len(found_components) >= 2:
+        return round(total, 2)
+    if len(found_components) == 1:
+        return round(total, 2)
+
+    # 3) Generic single "GST:" / "VAT:" style line.
+    specific_line = _line_containing(text, r"\b(?:gst|vat)\b")
     if specific_line:
         nums = _numbers_excluding_percent(specific_line)
         if nums:
             return clean_number(nums[-1])
 
+    # 4) Fall back to the bare word "tax" (skip "Tax ID" style lines).
     for line in text.split("\n"):
         if re.search(r"\btax\b", line, re.IGNORECASE) and re.search(r"\d", line):
             if re.search(r"\btax\s*(?:id|no\.?|number)\b", line, re.IGNORECASE):
