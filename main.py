@@ -121,12 +121,33 @@ def _line_containing(text: str, keyword_pattern: str) -> Optional[str]:
 
 def extract_amount(text: str) -> Optional[float]:
     """Subtotal = amount BEFORE tax (rule 3)."""
-    line = _line_containing(text, r"subtotal")
-    if not line:
-        return None
-    nums = _numbers_excluding_percent(line)
-    if nums:
-        return clean_number(nums[-1])
+    # Try, in priority order, the labels most likely to mean "pre-tax amount".
+    # More specific/unambiguous labels come first.
+    keyword_patterns = [
+        r"\bsub[\s\-]?total\b",
+        r"\bnet\s*amount\b",
+        r"\btaxable\s*(?:value|amount)\b",
+        r"\bamount\s*\(?\s*(?:excl(?:uding)?\.?|before)\s*tax\)?",
+        r"\bbase\s*amount\b",
+        r"\bnet\s*total\b",
+        r"\bprice\s*\(?\s*excl(?:uding)?\.?\s*tax\)?",
+    ]
+    for kp in keyword_patterns:
+        line = _line_containing(text, kp)
+        if line:
+            nums = _numbers_excluding_percent(line)
+            if nums:
+                return clean_number(nums[-1])
+
+    # Last-resort fallback: a bare "Amount:" label, as long as it's not
+    # part of "Tax Amount" / "Total Amount" (those mean something else).
+    for line in text.split("\n"):
+        if re.search(r"\bamount\b", line, re.IGNORECASE) and re.search(r"\d", line):
+            if re.search(r"\b(?:tax|total|grand|due|paid)\s*amount\b", line, re.IGNORECASE):
+                continue
+            nums = _numbers_excluding_percent(line)
+            if nums:
+                return clean_number(nums[-1])
     return None
 
 
