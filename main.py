@@ -70,12 +70,27 @@ def extract_date(text: str) -> Optional[str]:
 
 GENERIC_HEADER_WORDS = {
     "invoice", "tax", "commercial", "bill", "receipt", "statement", "proforma",
+    "original", "duplicate", "copy",
 }
+
+# words/patterns that mean "this line is metadata, not a company name"
+NON_VENDOR_LINE_PATTERNS = [
+    r"\binvoice\s*(?:no\.?|#|number)\b",
+    r"\bref(?:erence)?\b",
+    r"\bdate\b",
+    r"\bissued\b",
+    r"\bclient\b",
+    r"\bcustomer\b",
+    r"\bbill\s*to\b",
+    r"\bship\s*to\b",
+    r"\b(?:original|duplicate|triplicate)\s*(?:for|copy)\b",
+    r"^\s*$",
+]
 
 
 def extract_vendor(text: str) -> Optional[str]:
     patterns = [
-        r"(?:seller|vendor|from|billed by|company)\s*[:#]\s*([A-Za-z0-9&.,\'\-\s]+)",
+        r"(?:seller|vendor|supplier|from|billed by|sold by|issued by|merchant|company(?:\s*name)?|business(?:\s*name)?|provider)\s*[:#]\s*([A-Za-z0-9&.,\'\-\s]+)",
     ]
     for p in patterns:
         m = re.search(p, text, re.IGNORECASE)
@@ -84,13 +99,19 @@ def extract_vendor(text: str) -> Optional[str]:
             if line.strip(" ."):
                 return line.strip(" .,")
 
-    # Fallback: guess from the first line, e.g. "NovaSoft Solutions — Tax Invoice"
-    first_line = text.strip().split("\n")[0].strip()
-    # cut off trailing " — Tax Invoice" / " - Invoice" style suffixes
-    first_line = re.split(r"[—\-]\s*(?:tax\s*)?invoice", first_line, flags=re.IGNORECASE)[0].strip()
-    words = set(w.lower().strip(".,") for w in first_line.split())
-    if first_line and not words.issubset(GENERIC_HEADER_WORDS):
-        return first_line
+    # Fallback: scan the first few lines for something that looks like a
+    # company name (not a generic header, not another metadata field).
+    for raw_line in text.strip().split("\n")[:4]:
+        line = raw_line.strip()
+        if not line:
+            continue
+        if any(re.search(p, line, re.IGNORECASE) for p in NON_VENDOR_LINE_PATTERNS):
+            continue
+        # cut off trailing " — Tax Invoice" / " - Invoice" style suffixes
+        candidate = re.split(r"[—\-]\s*(?:tax\s*)?invoice", line, flags=re.IGNORECASE)[0].strip()
+        words = set(w.lower().strip(".,") for w in candidate.split())
+        if candidate and not words.issubset(GENERIC_HEADER_WORDS):
+            return candidate
     return None
 
 
