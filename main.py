@@ -94,26 +94,59 @@ def extract_vendor(text: str) -> Optional[str]:
     return None
 
 
+NUMBER_RE = r"[\d,]+\.?\d*"
+
+
+def _numbers_excluding_percent(line: str):
+    """Return all numeric amounts on a line, skipping any number that is
+    actually a percentage (i.e. immediately followed by a % sign)."""
+    results = []
+    for m in re.finditer(NUMBER_RE, line):
+        after = line[m.end():m.end() + 2].strip()
+        if after.startswith("%"):
+            continue
+        results.append(m.group(0))
+    return results
+
+
+def _line_containing(text: str, keyword_pattern: str) -> Optional[str]:
+    """Return the first line that contains the keyword AND at least one
+    digit (so header lines like 'NovaSoft — Tax Invoice' don't get picked
+    over the real 'IGST (18%): Rs. 25,200.00' line)."""
+    for line in text.split("\n"):
+        if re.search(keyword_pattern, line, re.IGNORECASE) and re.search(r"\d", line):
+            return line
+    return None
+
+
 def extract_amount(text: str) -> Optional[float]:
     """Subtotal = amount BEFORE tax (rule 3)."""
-    m = re.search(
-        r"subtotal\s*[:#]?\s*(?:rs\.?|inr|usd|\$|₹)?\s*([\d,]+\.?\d*)",
-        text,
-        re.IGNORECASE,
-    )
-    if m:
-        return clean_number(m.group(1))
+    line = _line_containing(text, r"subtotal")
+    if not line:
+        return None
+    nums = _numbers_excluding_percent(line)
+    if nums:
+        return clean_number(nums[-1])
     return None
 
 
 def extract_tax(text: str) -> Optional[float]:
-    m = re.search(
-        r"(?:gst|vat|igst|tax)\s*(?:\(\s*\d+%\s*\))?\s*[:#]?\s*(?:rs\.?|inr|usd|\$|₹)?\s*([\d,]+\.?\d*)",
-        text,
-        re.IGNORECASE,
-    )
-    if m:
-        return clean_number(m.group(1))
+    # Try specific tax-type keywords first (most reliable), then fall back
+    # to the generic word "tax" -- but skip lines like "Tax ID: 123456789"
+    # which aren't a tax amount at all.
+    specific_line = _line_containing(text, r"\b(?:gst|cgst|sgst|igst|vat|cess)\b")
+    if specific_line:
+        nums = _numbers_excluding_percent(specific_line)
+        if nums:
+            return clean_number(nums[-1])
+
+    for line in text.split("\n"):
+        if re.search(r"\btax\b", line, re.IGNORECASE) and re.search(r"\d", line):
+            if re.search(r"\btax\s*(?:id|no\.?|number)\b", line, re.IGNORECASE):
+                continue
+            nums = _numbers_excluding_percent(line)
+            if nums:
+                return clean_number(nums[-1])
     return None
 
 
